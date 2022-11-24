@@ -1,2 +1,3 @@
 --innodb-encrypt-tables
 --innodb-encrypt-log
+--innodb-undo-tablespaces=0
