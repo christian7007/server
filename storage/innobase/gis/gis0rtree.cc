@@ -570,7 +570,6 @@ rtr_adjust_upper_level(
 	/* Create a memory heap where the data tuple is stored */
 	heap = mem_heap_create(1024);
 
-	cursor.thr = sea_cur->thr;
 	cursor.page_cur.index = sea_cur->index();
 	cursor.page_cur.block = block;
 

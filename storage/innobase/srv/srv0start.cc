@@ -1134,10 +1134,6 @@ dberr_t srv_start(bool create_new_db)
 	ib::info() << "!!!!!!!! UNIV_DEBUG switched on !!!!!!!!!";
 #endif
 
-#ifdef UNIV_IBUF_DEBUG
-	ib::info() << "!!!!!!!! UNIV_IBUF_DEBUG switched on !!!!!!!!!";
-#endif
-
 	ib::info() << "Compressed tables use zlib " ZLIB_VERSION
 #ifdef UNIV_ZIP_DEBUG
 	      " with validation"
@@ -1846,13 +1842,6 @@ skip_monitors:
 				      trx_sys.get_max_trx_id());
 	}
 
-	if (srv_force_recovery == 0) {
-		/* In the change buffer we may have even bigger tablespace
-		id's, because we may have dropped those tablespaces, but
-		the buffered records have not been cleaned yet. */
-		ibuf_update_max_tablespace_id();
-	}
-
 	if (!srv_read_only_mode) {
 		if (create_new_db) {
 			srv_buffer_pool_load_at_startup = FALSE;
@@ -1907,10 +1896,6 @@ void innodb_preshutdown()
     return;
   if (!srv_fast_shutdown && srv_operation == SRV_OPERATION_NORMAL)
   {
-    /* Because a slow shutdown must empty the change buffer, we had
-    better prevent any further changes from being buffered. */
-    innodb_change_buffering= 0;
-
     if (trx_sys.is_initialised())
       while (trx_sys.any_active_transactions())
         std::this_thread::sleep_for(std::chrono::milliseconds(1));

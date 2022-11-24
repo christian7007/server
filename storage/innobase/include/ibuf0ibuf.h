@@ -31,12 +31,8 @@ Created 7/19/1997 Heikki Tuuri
 #include "dict0mem.h"
 #include "fsp0fsp.h"
 
-/** Default value for maximum on-disk size of change buffer in terms
-of percentage of the buffer pool. */
-#define CHANGE_BUFFER_DEFAULT_SIZE	(25)
-
-/* Possible operations buffered in the insert/whatever buffer. See
-ibuf_insert(). DO NOT CHANGE THE VALUES OF THESE, THEY ARE STORED ON DISK. */
+/* Possible operations buffered in the insert/whatever buffer.
+DO NOT CHANGE THE VALUES OF THESE, THEY ARE STORED ON DISK. */
 typedef enum {
 	IBUF_OP_INSERT = 0,
 	IBUF_OP_DELETE_MARK = 1,
@@ -46,26 +42,10 @@ typedef enum {
 	IBUF_OP_COUNT = 3
 } ibuf_op_t;
 
-/** Combinations of operations that can be buffered.
-@see innodb_change_buffering_names */
-enum ibuf_use_t {
-	IBUF_USE_NONE = 0,
-	IBUF_USE_INSERT,	/* insert */
-	IBUF_USE_DELETE_MARK,	/* delete */
-	IBUF_USE_INSERT_DELETE_MARK,	/* insert+delete */
-	IBUF_USE_DELETE,	/* delete+purge */
-	IBUF_USE_ALL		/* insert+delete+purge */
-};
-
-/** Operations that can currently be buffered. */
-extern ulong		innodb_change_buffering;
-
 /** Insert buffer struct */
 struct ibuf_t{
 	Atomic_relaxed<ulint> size;	/*!< current size of the ibuf index
 					tree, in pages */
-	Atomic_relaxed<ulint> max_size;	/*!< recommended maximum size of the
-					ibuf index tree, in pages */
 	ulint		seg_size;	/*!< allocated pages of the file
 					segment containing ibuf header and
 					tree */
@@ -78,17 +58,6 @@ struct ibuf_t{
 	ulint		free_list_len;	/*!< length of the free list */
 	ulint		height;		/*!< tree height */
 	dict_index_t*	index;		/*!< insert buffer index */
-
-	/** number of pages merged */
-	Atomic_counter<ulint> n_merges;
-	Atomic_counter<ulint> n_merged_ops[IBUF_OP_COUNT];
-					/*!< number of operations of each type
-					merged to index pages */
-	Atomic_counter<ulint> n_discarded_ops[IBUF_OP_COUNT];
-					/*!< number of operations of each type
-					discarded without merging due to the
-					tablespace being deleted or the
-					index being dropped */
 };
 
 /** The insert buffer control structure */
@@ -120,19 +89,6 @@ Creates the insert buffer data structure at a database startup.
 dberr_t
 ibuf_init_at_db_start(void);
 /*=======================*/
-/*********************************************************************//**
-Updates the max_size value for ibuf. */
-void
-ibuf_max_size_update(
-/*=================*/
-	ulint	new_val);	/*!< in: new value in terms of
-				percentage of the buffer pool size */
-/*********************************************************************//**
-Reads the biggest tablespace id from the high end of the insert buffer
-tree and updates the counter in fil_system. */
-void
-ibuf_update_max_tablespace_id(void);
-/*===============================*/
 /***************************************************************//**
 Starts an insert buffer mini-transaction. */
 UNIV_INLINE
@@ -164,65 +120,10 @@ ibuf_reset_free_bits(
 	buf_block_t*	block);	/*!< in: index page; free bits are set to 0
 				if the index is a non-clustered
 				non-unique, and page level is 0 */
-/************************************************************************//**
-Updates the free bits of an uncompressed page in the ibuf bitmap if
-there is not enough free on the page any more.  This is done in a
-separate mini-transaction, hence this operation does not restrict
-further work to only ibuf bitmap operations, which would result if the
-latch to the bitmap page were kept.  NOTE: The free bits in the insert
-buffer bitmap must never exceed the free space on a page.  It is
-unsafe to increment the bits in a separately committed
-mini-transaction, because in crash recovery, the free bits could
-momentarily be set too high.  It is only safe to use this function for
-decrementing the free bits.  Should more free space become available,
-we must not update the free bits here, because that would break crash
-recovery. */
-UNIV_INLINE
-void
-ibuf_update_free_bits_if_full(
-/*==========================*/
-	buf_block_t*	block,	/*!< in: index page to which we have added new
-				records; the free bits are updated if the
-				index is non-clustered and non-unique and
-				the page level is 0, and the page becomes
-				fuller */
-	ulint		max_ins_size,/*!< in: value of maximum insert size with
-				reorganize before the latest operation
-				performed to the page */
-	ulint		increase);/*!< in: upper limit for the additional space
-				used in the latest operation, if known, or
-				ULINT_UNDEFINED */
-/**********************************************************************//**
-Updates the free bits for an uncompressed page to reflect the present
-state.  Does this in the mtr given, which means that the latching
-order rules virtually prevent any further operations for this OS
-thread until mtr is committed.  NOTE: The free bits in the insert
-buffer bitmap must never exceed the free space on a page.  It is safe
-to set the free bits in the same mini-transaction that updated the
-page. */
-void
-ibuf_update_free_bits_low(
-/*======================*/
-	const buf_block_t*	block,		/*!< in: index page */
-	ulint			max_ins_size,	/*!< in: value of
-						maximum insert size
-						with reorganize before
-						the latest operation
-						performed to the page */
-	mtr_t*			mtr);		/*!< in/out: mtr */
-/**********************************************************************//**
-Updates the free bits for a compressed page to reflect the present
-state.  Does this in the mtr given, which means that the latching
-order rules virtually prevent any further operations for this OS
-thread until mtr is committed.  NOTE: The free bits in the insert
-buffer bitmap must never exceed the free space on a page.  It is safe
-to set the free bits in the same mini-transaction that updated the
-page. */
-void
-ibuf_update_free_bits_zip(
-/*======================*/
-	buf_block_t*	block,	/*!< in/out: index page */
-	mtr_t*		mtr);	/*!< in/out: mtr */
+/** Reset the change buffer bitmap free bits of a page.
+@param block  possibly a secondary index leaf page
+@param mtr    mini-transaction */
+void ibuf_reset_free_bits_low(const buf_block_t &block, mtr_t *mtr);
 /**********************************************************************//**
 Updates the free bits for the two pages to reflect the present state.
 Does this in the mtr given, which means that the latching order rules
@@ -236,18 +137,6 @@ ibuf_update_free_bits_for_two_pages_low(
 	buf_block_t*	block1,	/*!< in: index page */
 	buf_block_t*	block2,	/*!< in: index page */
 	mtr_t*		mtr);	/*!< in: mtr */
-/**********************************************************************//**
-A basic partial test if an insert to the insert buffer could be possible and
-recommended. */
-UNIV_INLINE
-ibool
-ibuf_should_try(
-/*============*/
-	dict_index_t*	index,			/*!< in: index where to insert */
-	ulint		ignore_sec_unique);	/*!< in: if != 0, we should
-						ignore UNIQUE constraint on
-						a secondary index when we
-						decide */
 /******************************************************************//**
 Returns TRUE if the current OS thread is performing an insert buffer
 routine.
@@ -315,32 +204,6 @@ Must not be called when recv_no_ibuf_operations==true.
 	ibuf_page_low(page_id, zip_size, mtr)
 
 #endif /* UNIV_DEBUG */
-/***********************************************************************//**
-Frees excess pages from the ibuf free list. This function is called when an OS
-thread calls fsp services to allocate a new file segment, or a new page to a
-file segment, and the thread did not own the fsp latch before this call. */
-void
-ibuf_free_excess_pages(void);
-/*========================*/
-
-/** Buffer an operation in the change buffer, instead of applying it
-directly to the file page, if this is possible. Does not do it if the index
-is clustered or unique.
-@param[in]	op		operation type
-@param[in]	entry		index entry to insert
-@param[in,out]	index		index where to insert
-@param[in]	page_id		page id where to insert
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
-@param[in,out]	thr		query thread
-@return true if success */
-bool
-ibuf_insert(
-	ibuf_op_t		op,
-	const dtuple_t*		entry,
-	dict_index_t*		index,
-	const page_id_t		page_id,
-	ulint			zip_size,
-	que_thr_t*		thr);
 
 /** Check whether buffered changes exist for a page.
 @param[in]	id		page identifier
@@ -381,18 +244,6 @@ ibuf_merge_space(
 /*=============*/
 	ulint	space);	/*!< in: space id */
 
-/******************************************************************//**
-Looks if the insert buffer is empty.
-@return true if empty */
-bool
-ibuf_is_empty(void);
-/*===============*/
-/******************************************************************//**
-Prints info of ibuf. */
-void
-ibuf_print(
-/*=======*/
-	FILE*	file);	/*!< in: file where to print */
 /********************************************************************
 Read the first two bytes from a record's fourth field (counter field in new
 records; something else in older records).
@@ -416,9 +267,8 @@ dberr_t ibuf_check_bitmap_on_import(const trx_t* trx, fil_space_t* space)
 
 /** Update free bits and buffered bits for bulk loaded page.
 @param block   secondary index leaf page
-@param mtr     mini-transaction
-@param reset   whether the page is full */
-void ibuf_set_bitmap_for_bulk_load(buf_block_t *block, mtr_t *mtr, bool reset);
+@param mtr     mini-transaction */
+void ibuf_set_bitmap_for_bulk_load(buf_block_t *block, mtr_t *mtr);
 
 #define IBUF_HEADER_PAGE_NO	FSP_IBUF_HEADER_PAGE_NO
 #define IBUF_TREE_ROOT_PAGE_NO	FSP_IBUF_TREE_ROOT_PAGE_NO

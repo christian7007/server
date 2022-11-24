@@ -82,15 +82,6 @@ HAVE_PSI_INTERFACE is defined. */
 #  define UNIV_PFS_MEMORY
 # endif /* HAVE_PSI_MEMORY_INTERFACE */
 
-/* There are mutexes/rwlocks that we want to exclude from
-instrumentation even if their corresponding performance schema
-define is set. And this PFS_NOT_INSTRUMENTED is used
-as the key value to identify those objects that would
-be excluded from instrumentation. */
-# define PFS_NOT_INSTRUMENTED		ULINT32_UNDEFINED
-
-# define PFS_IS_INSTRUMENTED(key)	((key) != PFS_NOT_INSTRUMENTED)
-
 #ifdef HAVE_PFS_THREAD_PROVIDER_H
 /* For PSI_MUTEX_CALL() and similar. */
 #include "pfs_thread_provider.h"
@@ -151,7 +142,6 @@ using the call command. */
 						assertions. */
 #define UNIV_LRU_DEBUG				/* debug the buffer pool LRU */
 #define UNIV_HASH_DEBUG				/* debug HASH_ macros */
-#define UNIV_IBUF_DEBUG				/* debug the insert buffer */
 #define UNIV_PERF_DEBUG                         /* debug flag that enables
                                                 light weight performance
                                                 related stuff. */
@@ -484,9 +474,6 @@ extern mysql_pfs_key_t fts_cache_mutex_key;
 extern mysql_pfs_key_t fts_cache_init_mutex_key;
 extern mysql_pfs_key_t fts_delete_mutex_key;
 extern mysql_pfs_key_t fts_doc_id_mutex_key;
-extern mysql_pfs_key_t ibuf_bitmap_mutex_key;
-extern mysql_pfs_key_t ibuf_mutex_key;
-extern mysql_pfs_key_t ibuf_pessimistic_insert_mutex_key;
 extern mysql_pfs_key_t recalc_pool_mutex_key;
 extern mysql_pfs_key_t purge_sys_pq_mutex_key;
 extern mysql_pfs_key_t recv_sys_mutex_key;

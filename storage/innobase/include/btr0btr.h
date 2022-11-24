@@ -56,12 +56,8 @@ is acceptable for the program to die with a clear assert failure. */
 #define BTR_MAX_LEVELS		100
 
 #define BTR_LATCH_MODE_WITHOUT_FLAGS(latch_mode)		\
-	btr_latch_mode((latch_mode) & ~(BTR_INSERT	\
-				| BTR_DELETE_MARK		\
-				| BTR_RTREE_UNDO_INS		\
+	btr_latch_mode((latch_mode) & ~(BTR_RTREE_UNDO_INS	\
 				| BTR_RTREE_DELETE_MARK		\
-				| BTR_DELETE			\
-				| BTR_IGNORE_SEC_UNIQUE		\
 				| BTR_ALREADY_S_LATCHED		\
 				| BTR_LATCH_FOR_INSERT		\
 				| BTR_LATCH_FOR_DELETE))

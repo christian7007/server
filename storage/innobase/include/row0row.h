@@ -344,23 +344,10 @@ row_parse_int(
 	ulint		mtype,
 	bool		unsigned_type);
 
-/** Result of row_search_index_entry */
-enum row_search_result {
-	ROW_FOUND = 0,		/*!< the record was found */
-	ROW_NOT_FOUND,		/*!< record not found */
-	ROW_BUFFERED,		/*!< one of BTR_INSERT, BTR_DELETE, or
-				BTR_DELETE_MARK was specified, the
-				secondary index leaf page was not in
-				the buffer pool, and the operation was
-				enqueued in the insert/delete buffer */
-	ROW_NOT_DELETED_REF	/*!< BTR_DELETE was specified, and
-				row_purge_poss_sec() failed */
-};
-
 /***************************************************************//**
 Searches an index record.
-@return whether the record was found or buffered */
-enum row_search_result
+@return whether the record was found */
+bool
 row_search_index_entry(
 /*===================*/
 	const dtuple_t*	entry,	/*!< in: index entry */
@@ -400,20 +387,13 @@ row_raw_format(
 
 /** Prepare to start a mini-transaction to modify an index.
 @param[in,out]	mtr		mini-transaction
-@param[in,out]	index		possibly secondary index
-@param[in]	pessimistic	whether this is a pessimistic operation */
-inline
-void
-row_mtr_start(mtr_t* mtr, dict_index_t* index, bool pessimistic)
+@param[in,out]	index		possibly secondary index */
+inline void row_mtr_start(mtr_t* mtr, dict_index_t* index)
 {
 	mtr->start();
 
 	switch (index->table->space_id) {
 	case IBUF_SPACE_ID:
-		if (pessimistic
-		    && !(index->type & (DICT_UNIQUE | DICT_SPATIAL))) {
-			ibuf_free_excess_pages();
-		}
 		break;
 	case SRV_TMP_SPACE_ID:
 		mtr->set_log_mode(MTR_LOG_NO_REDO);

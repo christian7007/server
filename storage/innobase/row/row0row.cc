@@ -1262,8 +1262,8 @@ row_get_clust_rec(
 
 /***************************************************************//**
 Searches an index record.
-@return whether the record was found or buffered */
-enum row_search_result
+@return whether the record was found */
+bool
 row_search_index_entry(
 /*===================*/
 	const dtuple_t*	entry,	/*!< in: index entry */
@@ -1272,55 +1272,21 @@ row_search_index_entry(
 				be closed by the caller */
 	mtr_t*		mtr)	/*!< in: mtr */
 {
-	ulint	n_fields;
-	ulint	low_match;
-	rec_t*	rec;
-
 	ut_ad(dtuple_check_typed(entry));
 
 	if (pcur->index()->is_spatial()) {
 		if (rtr_pcur_open(pcur->index(), entry, mode, pcur, mtr)) {
-			return ROW_NOT_FOUND;
+			return false;
 		}
 	} else {
 		if (btr_pcur_open(entry, PAGE_CUR_LE, mode, pcur, 0, mtr)
 		    != DB_SUCCESS) {
-			return ROW_NOT_FOUND;
+			return false;
 		}
 	}
 
-	switch (btr_pcur_get_btr_cur(pcur)->flag) {
-	case BTR_CUR_DELETE_REF:
-		ut_ad(!(~mode & BTR_DELETE));
-		ut_ad(!pcur->index()->is_spatial());
-		return(ROW_NOT_DELETED_REF);
-
-	case BTR_CUR_DEL_MARK_IBUF:
-	case BTR_CUR_DELETE_IBUF:
-	case BTR_CUR_INSERT_TO_IBUF:
-		return(ROW_BUFFERED);
-
-	case BTR_CUR_HASH:
-	case BTR_CUR_HASH_FAIL:
-	case BTR_CUR_BINARY:
-		break;
-	}
-
-	low_match = btr_pcur_get_low_match(pcur);
-
-	rec = btr_pcur_get_rec(pcur);
-
-	n_fields = dtuple_get_n_fields(entry);
-
-	if (page_rec_is_infimum(rec)) {
-
-		return(ROW_NOT_FOUND);
-	} else if (low_match != n_fields) {
-
-		return(ROW_NOT_FOUND);
-	}
-
-	return(ROW_FOUND);
+	return !btr_pcur_is_before_first_on_page(pcur)
+		&& btr_pcur_get_low_match(pcur) == dtuple_get_n_fields(entry);
 }
 
 /*******************************************************************//**

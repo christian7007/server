@@ -156,8 +156,7 @@ If mode is PAGE_CUR_GE, then up_match will a have a sensible value.
                   PAGE_CUR_GE, as the latter may end up on the previous page of
                   the record! Inserts should always be made using PAGE_CUR_LE
                   to search the position!
-@param latch_mode BTR_SEARCH_LEAF, ..., ORed with at most one of BTR_INSERT,
-                  BTR_DELETE_MARK, or BTR_DELETE;
+@param latch_mode BTR_SEARCH_LEAF, ...
                   cursor->left_block is used to store a pointer to the left
                   neighbor page
 @param cursor     tree cursor; the cursor page is s- or x-latched, but see also
@@ -723,33 +722,18 @@ enum btr_cur_method {
 				reference is stored in the field
 				hash_node, and might be necessary to
 				update */
-	BTR_CUR_BINARY,		/*!< success using the binary search */
-	BTR_CUR_INSERT_TO_IBUF,	/*!< performed the intended insert to
-				the insert buffer */
-	BTR_CUR_DEL_MARK_IBUF,	/*!< performed the intended delete
-				mark in the insert/delete buffer */
-	BTR_CUR_DELETE_IBUF,	/*!< performed the intended delete in
-				the insert/delete buffer */
-	BTR_CUR_DELETE_REF	/*!< row_purge_poss_sec() failed */
+	BTR_CUR_BINARY		/*!< success using the binary search */
 };
 
 /** The tree cursor: the definition appears here only for the compiler
 to know struct size! */
 struct btr_cur_t {
 	page_cur_t	page_cur;	/*!< page cursor */
-	purge_node_t*	purge_node;	/*!< purge node, for BTR_DELETE */
 	buf_block_t*	left_block;	/*!< this field is used to store
 					a pointer to the left neighbor
 					page, in the cases
 					BTR_SEARCH_PREV and
 					BTR_MODIFY_PREV */
-	/*------------------------------*/
-	que_thr_t*	thr;		/*!< this field is only used
-					when btr_cur_search_to_nth_level
-					is called for an index entry
-					insertion: the calling query
-					thread is passed here to be
-					used in the insert buffer */
 	/*------------------------------*/
 	/** The following fields are used in
 	btr_cur_search_to_nth_level to pass information: */

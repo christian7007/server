@@ -564,8 +564,7 @@ void PageBulk::commit(bool success)
 {
   finish();
   if (success && !m_index->is_clust() && page_is_leaf(m_page))
-    ibuf_set_bitmap_for_bulk_load(m_block, &m_mtr,
-                                  innobase_fill_factor == 100);
+    ibuf_set_bitmap_for_bulk_load(m_block, &m_mtr);
   m_mtr.commit();
 }
 

@@ -36,6 +36,7 @@ Created 11/5/1995 Heikki Tuuri
 #include "buf0buddy.h"
 #include "buf0dblwr.h"
 #include "ibuf0ibuf.h"
+#include "page0zip.h"
 #include "log0recv.h"
 #include "trx0sys.h"
 #include "os0file.h"
@@ -47,35 +48,6 @@ Created 11/5/1995 Heikki Tuuri
 read-ahead is not done: this is to prevent flooding the buffer pool with
 i/o-fixed buffer blocks */
 #define BUF_READ_AHEAD_PEND_LIMIT	2
-
-/** Remove the sentinel block for the watch before replacing it with a
-real block. watch_unset() or watch_occurred() will notice
-that the block has been replaced with the real block.
-@param w          sentinel
-@param chain      locked hash table chain
-@return           w->state() */
-inline uint32_t buf_pool_t::watch_remove(buf_page_t *w,
-                                         buf_pool_t::hash_chain &chain)
-{
-  mysql_mutex_assert_owner(&buf_pool.mutex);
-  ut_ad(xtest() || page_hash.lock_get(chain).is_write_locked());
-  ut_ad(w >= &watch[0]);
-  ut_ad(w < &watch[array_elements(watch)]);
-  ut_ad(!w->in_zip_hash);
-  ut_ad(!w->zip.data);
-
-  uint32_t s{w->state()};
-  w->set_state(buf_page_t::NOT_USED);
-  ut_ad(s >= buf_page_t::UNFIXED);
-  ut_ad(s < buf_page_t::READ_FIX);
-
-  if (~buf_page_t::LRU_MASK & s)
-    page_hash.remove(chain, w);
-
-  ut_ad(!w->in_page_hash);
-  w->id_= page_id_t(~0ULL);
-  return s;
-}
 
 /** Initialize a page for read to the buffer buf_pool. If the page is
 (1) already in buf_pool, or
@@ -128,8 +100,7 @@ static buf_page_t* buf_page_init_for_read(ulint mode, const page_id_t page_id,
 
   mysql_mutex_lock(&buf_pool.mutex);
 
-  buf_page_t *hash_page= buf_pool.page_hash.get(page_id, chain);
-  if (hash_page && !buf_pool.watch_is_sentinel(*hash_page))
+  if (buf_pool.page_hash.get(page_id, chain))
   {
     /* The page is already in the buffer pool. */
     if (block)
@@ -149,11 +120,6 @@ static buf_page_t* buf_page_init_for_read(ulint mode, const page_id_t page_id,
     {
       transactional_lock_guard<page_hash_latch> g
         {buf_pool.page_hash.lock_get(chain)};
-
-      if (hash_page)
-        bpage->set_state(buf_pool.watch_remove(hash_page, chain) +
-                         (buf_page_t::READ_FIX - buf_page_t::UNFIXED));
-
       buf_pool.page_hash.append(chain, &block->page);
     }
 
@@ -191,9 +157,7 @@ static buf_page_t* buf_page_init_for_read(ulint mode, const page_id_t page_id,
     check the page_hash again, as it may have been modified. */
     if (UNIV_UNLIKELY(lru))
     {
-      hash_page= buf_pool.page_hash.get(page_id, chain);
-
-      if (UNIV_UNLIKELY(hash_page && !buf_pool.watch_is_sentinel(*hash_page)))
+      if (UNIV_LIKELY_NULL(buf_pool.page_hash.get(page_id, chain)))
       {
         /* The block was added by some other thread. */
         buf_buddy_free(data, zip_size);
@@ -213,11 +177,6 @@ static buf_page_t* buf_page_init_for_read(ulint mode, const page_id_t page_id,
     {
       transactional_lock_guard<page_hash_latch> g
         {buf_pool.page_hash.lock_get(chain)};
-
-      if (hash_page)
-        bpage->set_state(buf_pool.watch_remove(hash_page, chain) +
-                         (buf_page_t::READ_FIX - buf_page_t::UNFIXED));
-
       buf_pool.page_hash.append(chain, bpage);
     }
 

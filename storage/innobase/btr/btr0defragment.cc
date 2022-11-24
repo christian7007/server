@@ -395,14 +395,7 @@ btr_defragment_merge_pages(
 	// Set ibuf free bits if necessary.
 	if (!dict_index_is_clust(index)
 	    && page_is_leaf(to_page)) {
-		if (zip_size) {
-			ibuf_reset_free_bits(to_block);
-		} else {
-			ibuf_update_free_bits_if_full(
-				to_block,
-				srv_page_size,
-				ULINT_UNDEFINED);
-		}
+		ibuf_reset_free_bits(to_block);
 	}
 	btr_cur_t parent;
 	parent.page_cur.index = index;

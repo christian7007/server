@@ -80,10 +80,7 @@ in i_s_page_type[] array */
 /** R-tree index page */
 #define	I_S_PAGE_TYPE_RTREE		(FIL_PAGE_TYPE_LAST + 1)
 
-/** Change buffer B-tree page */
-#define	I_S_PAGE_TYPE_IBUF		(FIL_PAGE_TYPE_LAST + 2)
-
-#define I_S_PAGE_TYPE_LAST		I_S_PAGE_TYPE_IBUF
+#define I_S_PAGE_TYPE_LAST		I_S_PAGE_TYPE_RTREE
 
 #define I_S_PAGE_TYPE_BITS		4
 
@@ -104,7 +101,6 @@ static buf_page_desc_t	i_s_page_type[] = {
 	{"COMPRESSED_BLOB2", FIL_PAGE_TYPE_ZBLOB2},
 	{"UNKNOWN", I_S_PAGE_TYPE_UNKNOWN},
 	{"RTREE_INDEX", I_S_PAGE_TYPE_RTREE},
-	{"IBUF_INDEX", I_S_PAGE_TYPE_IBUF},
 	{"PAGE COMPRESSED", FIL_PAGE_PAGE_COMPRESSED},
 	{"PAGE COMPRESSED AND ENCRYPTED", FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED},
 };
@@ -3824,14 +3820,9 @@ i_s_innodb_set_page_type(
 		their values are defined as 17855 and 17854, so we cannot
 		use them to index into i_s_page_type[] array, its array index
 		in the i_s_page_type[] array is I_S_PAGE_TYPE_INDEX
-		(1) for index pages or I_S_PAGE_TYPE_IBUF for
-		change buffer index pages */
+		(1) for index pages */
 		if (page_type == FIL_PAGE_RTREE) {
 			page_info->page_type = I_S_PAGE_TYPE_RTREE;
-		} else if (page_info->index_id
-			   == static_cast<index_id_t>(DICT_IBUF_ID_MIN
-						      + IBUF_SPACE_ID)) {
-			page_info->page_type = I_S_PAGE_TYPE_IBUF;
 		} else {
 			ut_ad(page_type == FIL_PAGE_INDEX
 			      || page_type == FIL_PAGE_TYPE_INSTANT);

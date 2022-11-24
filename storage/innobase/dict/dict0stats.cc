@@ -1407,10 +1407,6 @@ dummy_empty:
 		dict_stats_empty_index(index, false);
 		index->table->stats_mutex_unlock();
 		return err;
-#if defined UNIV_DEBUG || defined UNIV_IBUF_DEBUG
-	} else if (ibuf_debug && !dict_index_is_clust(index)) {
-		goto dummy_empty;
-#endif /* UNIV_DEBUG || UNIV_IBUF_DEBUG */
 	} else if (dict_index_is_online_ddl(index) || !index->is_committed()
 		   || !index->table->space) {
 		goto dummy_empty;

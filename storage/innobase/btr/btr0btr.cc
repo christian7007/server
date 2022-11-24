@@ -2629,7 +2629,6 @@ btr_insert_into_right_sibling(
 	page_t*		next_page;
 	btr_cur_t	next_father_cursor;
 	rec_t*		rec = nullptr;
-	ulint		max_size;
 
 	next_block = btr_block_get(*cursor->index(), next_page_no, RW_X_LATCH,
 				   page_is_leaf(page), mtr);
@@ -2654,8 +2653,6 @@ btr_insert_into_right_sibling(
 				       &next_page_cursor, nullptr)) {
 		return nullptr;
 	}
-
-	max_size = page_get_max_insert_size_after_reorganize(next_page, 1);
 
 	/* Extends gap lock for the next page */
 	if (is_leaf && cursor->index()->has_locking()) {
@@ -2718,14 +2715,7 @@ btr_insert_into_right_sibling(
 	    && !cursor->index()->table->is_temporary()) {
 		/* Update the free bits of the B-tree page in the
 		insert buffer bitmap. */
-
-		if (next_block->page.zip.ssize) {
-			ibuf_update_free_bits_zip(next_block, mtr);
-		} else {
-			ibuf_update_free_bits_if_full(
-				next_block, max_size,
-				rec_offs_size(*offsets) + PAGE_DIR_SLOT_SIZE);
-		}
+		ibuf_reset_free_bits_low(*next_block, mtr);
 	}
 
 	return(rec);
@@ -3970,22 +3960,7 @@ cannot_merge:
 		committed mini-transaction, because in crash recovery,
 		the free bits could momentarily be set too high. */
 
-		if (merge_block->zip_size()) {
-			/* Because the free bits may be incremented
-			and we cannot update the insert buffer bitmap
-			in the same mini-transaction, the only safe
-			thing we can do here is the pessimistic
-			approach: reset the free bits. */
-			ibuf_reset_free_bits(merge_block);
-		} else {
-			/* On uncompressed pages, the free bits will
-			never increase here.  Thus, it is safe to
-			write the bits accurately in a separate
-			mini-transaction. */
-			ibuf_update_free_bits_if_full(merge_block,
-						      srv_page_size,
-						      ULINT_UNDEFINED);
-		}
+		ibuf_reset_free_bits(merge_block);
 	}
 
 	ut_ad(page_validate(merge_page, index));

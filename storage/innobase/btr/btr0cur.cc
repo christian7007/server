@@ -73,15 +73,6 @@ Created 10/16/1994 Heikki Tuuri
 #endif /* WITH_WSREP */
 #include "log.h"
 
-/** Buffered B-tree operation types, introduced as part of delete buffering. */
-enum btr_op_t {
-	BTR_NO_OP = 0,			/*!< Not buffered */
-	BTR_INSERT_OP,			/*!< Insert, do not ignore UNIQUE */
-	BTR_INSERT_IGNORE_UNIQUE_OP,	/*!< Insert, ignoring UNIQUE */
-	BTR_DELETE_OP,			/*!< Purge a delete-marked record */
-	BTR_DELMARK_OP			/*!< Mark a record for deletion */
-};
-
 /** Modification types for the B-tree operation.
     Note that the order must be DELETE, BOTH, INSERT !!
  */
@@ -758,7 +749,7 @@ btr_cur_optimistic_latch_leaves(
 		return(buf_page_optimistic_get(*latch_mode, block,
 				modify_clock, mtr));
 	case BTR_SEARCH_PREV: /* btr_pcur_move_backward_from_page() */
-	case BTR_MODIFY_PREV: /* Ditto, or ibuf_insert() */
+	case BTR_MODIFY_PREV: /* Ditto */
 		uint32_t curr_page_no, left_page_no;
 		{
 			transactional_shared_lock_guard<block_lock> g{
@@ -1063,19 +1054,10 @@ btr_cur_need_opposite_intention(
 @return maximum size of a node pointer record in bytes */
 static ulint btr_node_ptr_max_size(const dict_index_t* index)
 {
-	if (dict_index_is_ibuf(index)) {
-		/* cannot estimate accurately */
-		/* This is universal index for change buffer.
-		The max size of the entry is about max key length * 2.
-		(index key + primary key to be inserted to the index)
-		(The max key length is UNIV_PAGE_SIZE / 16 * 3 at
-		 ha_innobase::max_supported_key_length(),
-		 considering MAX_KEY_LENGTH = 3072 at MySQL imposes
-		 the 3500 historical InnoDB value for 16K page size case.)
-		For the universal index, node_ptr contains most of the entry.
-		And 512 is enough to contain ibuf columns and meta-data */
-		return srv_page_size / 8 * 3 + 512;
-	}
+#if 1 // FIXME: remove this
+	if (index->is_ibuf()) return srv_page_size / 8 * 3 + 512;
+#endif
+	ut_ad(!index->is_ibuf());
 
 	/* Each record has page_no, length of page_no and header. */
 	ulint comp = dict_table_is_comp(index->table);
@@ -1245,10 +1227,8 @@ dberr_t btr_cur_search_to_nth_level(ulint level,
 	ulint		rw_latch;
 	page_cur_mode_t	page_mode;
 	page_cur_mode_t	search_mode = PAGE_CUR_UNSUPP;
-	ulint		buf_mode;
 	ulint		node_ptr_max_size = srv_page_size / 2;
 	page_cur_t*	page_cursor;
-	btr_op_t	btr_op;
 	ulint		root_height = 0; /* remove warning */
 
 	btr_intention_t	lock_intention;
@@ -1287,7 +1267,7 @@ dberr_t btr_cur_search_to_nth_level(ulint level,
 	ut_ad(level == 0 || mode == PAGE_CUR_LE
 	      || RTREE_SEARCH_MODE(mode));
 	ut_ad(dict_index_check_search_tuple(index, tuple));
-	ut_ad(!dict_index_is_ibuf(index) || ibuf_inside(mtr));
+	ut_ad(!index->is_ibuf() || ibuf_inside(mtr));
 	ut_ad(dtuple_check_typed(tuple));
 	ut_ad(!(index->type & DICT_FTS));
 	ut_ad(index->page != FIL_NULL);
@@ -1307,36 +1287,6 @@ dberr_t btr_cur_search_to_nth_level(ulint level,
 	      || srv_read_only_mode
 	      || mtr->memo_contains_flagged(&index->lock, MTR_MEMO_S_LOCK
 					    | MTR_MEMO_SX_LOCK));
-
-	/* These flags are mutually exclusive, they are lumped together
-	with the latch mode for historical reasons. It's possible for
-	none of the flags to be set. */
-	switch (UNIV_EXPECT(latch_mode & BTR_DELETE, 0)) {
-	default:
-		btr_op = BTR_NO_OP;
-		break;
-	case BTR_INSERT:
-		btr_op = (latch_mode & BTR_IGNORE_SEC_UNIQUE)
-			? BTR_INSERT_IGNORE_UNIQUE_OP
-			: BTR_INSERT_OP;
-		break;
-	case BTR_DELETE:
-		btr_op = BTR_DELETE_OP;
-		ut_a(cursor->purge_node);
-		break;
-	case BTR_DELETE_MARK:
-		btr_op = BTR_DELMARK_OP;
-		break;
-	}
-
-	/* Operations on the insert buffer tree cannot be buffered. */
-	ut_ad(btr_op == BTR_NO_OP || !dict_index_is_ibuf(index));
-	/* Operations on the clustered index cannot be buffered. */
-	ut_ad(btr_op == BTR_NO_OP || !dict_index_is_clust(index));
-	/* Operations on the temporary table(indexes) cannot be buffered. */
-	ut_ad(btr_op == BTR_NO_OP || !index->table->is_temporary());
-	/* Operation on the spatial index cannot be buffered. */
-	ut_ad(btr_op == BTR_NO_OP || !dict_index_is_spatial(index));
 
 	lock_intention = btr_cur_get_and_clear_intention(&latch_mode);
 
@@ -1512,7 +1462,6 @@ x_latch_index:
 	btr_latch_leaves_t latch_leaves = {{NULL, NULL, NULL}, {0, 0, 0}};
 
 search_loop:
-	buf_mode = BUF_GET;
 	rw_latch = RW_NO_LATCH;
 	rtree_parent_modified = false;
 
@@ -1534,17 +1483,6 @@ search_loop:
 		}
 	} else if (latch_mode <= BTR_MODIFY_LEAF) {
 		rw_latch = latch_mode;
-
-		if (btr_op != BTR_NO_OP
-		    && ibuf_should_try(index, btr_op != BTR_INSERT_OP)) {
-
-			/* Try to buffer the operation if the leaf
-			page is not in the buffer pool. */
-
-			buf_mode = btr_op == BTR_DELETE_OP
-				? BUF_GET_IF_IN_POOL_OR_WATCH
-				: BUF_GET_IF_IN_POOL;
-		}
 	}
 
 retry_page_get:
@@ -1552,90 +1490,11 @@ retry_page_get:
 	tree_savepoints[n_blocks] = mtr_set_savepoint(mtr);
 	dberr_t err;
 	block = buf_page_get_gen(page_id, zip_size, rw_latch, guess,
-				 buf_mode, mtr, &err,
+				 BUF_GET, mtr, &err,
 				 height == 0 && !index->is_clust());
+
 	if (!block) {
-		switch (err) {
-		case DB_SUCCESS:
-			/* change buffering */
-			break;
-		case DB_DECRYPTION_FAILED:
-			btr_decryption_failed(*index);
-			/* fall through */
-		default:
-			goto func_exit;
-		}
-
-		/* This must be a search to perform an insert/delete
-		mark/ delete; try using the insert/delete buffer */
-
-		ut_ad(height == 0);
-		ut_ad(cursor->thr);
-
-		switch (btr_op) {
-		default:
-			MY_ASSERT_UNREACHABLE();
-			break;
-		case BTR_INSERT_OP:
-		case BTR_INSERT_IGNORE_UNIQUE_OP:
-			ut_ad(buf_mode == BUF_GET_IF_IN_POOL);
-
-			if (ibuf_insert(IBUF_OP_INSERT, tuple, index,
-					page_id, zip_size, cursor->thr)) {
-
-				cursor->flag = BTR_CUR_INSERT_TO_IBUF;
-
-				goto func_exit;
-			}
-			break;
-
-		case BTR_DELMARK_OP:
-			ut_ad(buf_mode == BUF_GET_IF_IN_POOL);
-
-			if (ibuf_insert(IBUF_OP_DELETE_MARK, tuple,
-					index, page_id, zip_size,
-					cursor->thr)) {
-
-				cursor->flag = BTR_CUR_DEL_MARK_IBUF;
-
-				goto func_exit;
-			}
-
-			break;
-
-		case BTR_DELETE_OP:
-			ut_ad(buf_mode == BUF_GET_IF_IN_POOL_OR_WATCH);
-			ut_ad(index->is_btree());
-			auto& chain = buf_pool.page_hash.cell_get(
-				page_id.fold());
-
-			if (!row_purge_poss_sec(cursor->purge_node,
-						index, tuple)) {
-
-				/* The record cannot be purged yet. */
-				cursor->flag = BTR_CUR_DELETE_REF;
-			} else if (ibuf_insert(IBUF_OP_DELETE, tuple,
-					       index, page_id, zip_size,
-					       cursor->thr)) {
-
-				/* The purge was buffered. */
-				cursor->flag = BTR_CUR_DELETE_IBUF;
-			} else {
-				/* The purge could not be buffered. */
-				buf_pool.watch_unset(page_id, chain);
-				break;
-			}
-
-			buf_pool.watch_unset(page_id, chain);
-			goto func_exit;
-		}
-
-		/* Insert to the insert/delete buffer did not succeed, we
-		must read the page from disk. */
-
-		buf_mode = BUF_GET;
-
-		goto retry_page_get;
+		goto func_exit;
 	}
 
 	tree_blocks[n_blocks] = block;
@@ -1658,7 +1517,7 @@ retry_page_get:
 				= mtr_set_savepoint(mtr);
 			buf_block_t* get_block = buf_page_get_gen(
 				page_id_t(page_id.space(), left_page_no),
-				zip_size, rw_latch, NULL, buf_mode,
+				zip_size, rw_latch, NULL, BUF_GET,
 				mtr, &err);
 			if (!get_block) {
 				if (err == DB_DECRYPTION_FAILED) {
@@ -1729,7 +1588,6 @@ retry_page_get:
 			}
 
 			/* Save the MBR */
-			cursor->rtr_info->thr = cursor->thr;
 			rtr_get_mbr_from_tuple(tuple, &cursor->rtr_info->mbr);
 		}
 
@@ -1900,6 +1758,7 @@ retry_page_get:
 
 	ut_ad(height == btr_page_get_level(page_cur_get_page(page_cursor)));
 
+#if 0 // FIXME
 	/* Add Predicate lock if it is serializable isolation
 	and only if it is in the search case */
 	if (dict_index_is_spatial(index)
@@ -1928,6 +1787,7 @@ retry_page_get:
 			block->page.lock.s_unlock();
 		}
 	}
+#endif
 
 	if (level != height) {
 
@@ -2230,13 +2090,12 @@ need_opposite_intention:
 
 		n_blocks++;
 
-		if (UNIV_UNLIKELY(height == 0 && dict_index_is_ibuf(index))) {
+		if (UNIV_UNLIKELY(height == 0 && index->is_ibuf())) {
 			/* We're doing a search on an ibuf tree and we're one
 			level above the leaf page. */
 
 			ut_ad(level == 0);
 
-			buf_mode = BUF_GET;
 			rw_latch = RW_NO_LATCH;
 			goto retry_page_get;
 		}
@@ -3379,29 +3238,7 @@ fail_err:
 	if (leaf
 	    && !dict_index_is_clust(index)
 	    && !index->table->is_temporary()) {
-		/* Update the free bits of the B-tree page in the
-		insert buffer bitmap. */
-
-		/* The free bits in the insert buffer bitmap must
-		never exceed the free space on a page.  It is safe to
-		decrement or reset the bits in the bitmap in a
-		mini-transaction that is committed before the
-		mini-transaction that affects the free space. */
-
-		/* It is unsafe to increment the bits in a separately
-		committed mini-transaction, because in crash recovery,
-		the free bits could momentarily be set too high. */
-
-		if (block->page.zip.data) {
-			/* Update the bits in the same mini-transaction. */
-			ibuf_update_free_bits_zip(block, mtr);
-		} else {
-			/* Decrement the bits in a separate
-			mini-transaction. */
-			ibuf_update_free_bits_if_full(
-				block, max_size,
-				rec_size + PAGE_DIR_SLOT_SIZE);
-		}
+		ibuf_reset_free_bits_low(*block, mtr);
 	}
 
 	*big_rec = big_rec_vec;
@@ -3787,7 +3624,7 @@ btr_cur_update_alloc_zip_func(
 	const page_t*	page = page_cur_get_page(cursor);
 
 	ut_ad(page_zip == page_cur_get_page_zip(cursor));
-	ut_ad(!dict_index_is_ibuf(index));
+	ut_ad(!index->is_ibuf());
 	ut_ad(rec_offs_validate(page_cur_get_rec(cursor), index, offsets));
 
 	if (page_zip_available(page_zip, dict_index_is_clust(index),
@@ -4125,11 +3962,9 @@ btr_cur_update_in_place(
 func_exit:
 	if (page_zip
 	    && !(flags & BTR_KEEP_IBUF_BITMAP)
-	    && !dict_index_is_clust(index)
-	    && page_is_leaf(buf_block_get_frame(block))) {
-		/* Update the free bits in the insert buffer. */
+	    && !dict_index_is_clust(index)) {
 		ut_ad(!index->table->is_temporary());
-		ibuf_update_free_bits_zip(block, mtr);
+		ibuf_reset_free_bits_low(*block, mtr);
 	}
 
 	return(err);
@@ -4307,7 +4142,6 @@ btr_cur_optimistic_update(
 	ulint		max_size;
 	ulint		new_rec_size;
 	ulint		old_rec_size;
-	ulint		max_ins_size = 0;
 	dtuple_t*	new_entry;
 	roll_ptr_t	roll_ptr;
 	ulint		i;
@@ -4464,11 +4298,6 @@ any_extern:
 		: (old_rec_size
 		   + page_get_max_insert_size_after_reorganize(page, 1));
 
-	if (!page_zip) {
-		max_ins_size = page_get_max_insert_size_after_reorganize(
-				page, 1);
-	}
-
 	if (!(((max_size >= BTR_CUR_PAGE_REORGANIZE_LIMIT)
 	       && (max_size >= new_rec_size))
 	      || (page_get_n_recs(page) <= 1))) {
@@ -4554,13 +4383,7 @@ corrupted:
 func_exit:
 	if (!(flags & BTR_KEEP_IBUF_BITMAP)
 	    && !dict_index_is_clust(index)) {
-		/* Update the free bits in the insert buffer. */
-		if (page_zip) {
-			ut_ad(!index->table->is_temporary());
-			ibuf_update_free_bits_zip(block, mtr);
-		} else if (!index->table->is_temporary()) {
-			ibuf_update_free_bits_low(block, max_ins_size, mtr);
-		}
+		ibuf_reset_free_bits_low(*block, mtr);
 	}
 
 	if (err != DB_SUCCESS) {
@@ -4714,10 +4537,9 @@ btr_cur_pessimistic_update(
 		page was recompressed. */
 		if (page_zip
 		    && optim_err != DB_ZIP_OVERFLOW
-		    && !dict_index_is_clust(index)
-		    && page_is_leaf(block->page.frame)) {
+		    && !dict_index_is_clust(index)) {
 			ut_ad(!index->table->is_temporary());
-			ibuf_update_free_bits_zip(block, mtr);
+			ibuf_reset_free_bits_low(*block, mtr);
 		}
 
 		if (big_rec_vec != NULL) {
@@ -4846,11 +4668,6 @@ btr_cur_pessimistic_update(
 		btr_cur_write_sys(new_entry, index, trx_id, roll_ptr);
 	}
 
-	const ulint max_ins_size = page_zip
-		? 0
-		: page_get_max_insert_size_after_reorganize(block->page.frame,
-							    1);
-
 	if (UNIV_UNLIKELY(is_metadata)) {
 		ut_ad(new_entry->is_metadata());
 		ut_ad(index->is_instant());
@@ -4935,18 +4752,10 @@ btr_cur_pessimistic_update(
 				rec_offs_make_valid(page_cursor->rec, index,
 						    true, *offsets);
 			}
-		} else if (!dict_index_is_clust(index)
-			   && page_is_leaf(block->page.frame)) {
-			/* Update the free bits in the insert buffer.
-			This is the same block which was skipped by
+		} else if (!dict_index_is_clust(index)) {
+			/* This is the same block which was skipped by
 			BTR_KEEP_IBUF_BITMAP. */
-			if (page_zip) {
-				ut_ad(!index->table->is_temporary());
-				ibuf_update_free_bits_zip(block, mtr);
-			} else if (!index->table->is_temporary()) {
-				ibuf_update_free_bits_low(block, max_ins_size,
-							  mtr);
-			}
+			ibuf_reset_free_bits_low(*block, mtr);
 		}
 
 		if (!srv_read_only_mode
@@ -5334,9 +5143,6 @@ btr_cur_optimistic_delete(
 	}
 
 	{
-		page_t*		page	= buf_block_get_frame(block);
-		page_zip_des_t*	page_zip= buf_block_get_page_zip(block);
-
 		if (UNIV_UNLIKELY(rec_get_info_bits(rec, page_rec_is_comp(rec))
 				  & REC_INFO_MIN_REC_FLAG)) {
 			/* This should be rolling back instant ADD COLUMN.
@@ -5345,7 +5151,7 @@ btr_cur_optimistic_delete(
 			insert into SYS_COLUMNS is rolled back. */
 			ut_ad(cursor->index()->table->supports_instant());
 			ut_ad(cursor->index()->is_primary());
-			ut_ad(!page_zip);
+			ut_ad(!buf_block_get_page_zip(block));
 			page_cur_delete_rec(btr_cur_get_page_cur(cursor),
 					    offsets, mtr);
 			/* We must empty the PAGE_FREE list, because
@@ -5363,40 +5169,8 @@ btr_cur_optimistic_delete(
 			btr_search_update_hash_on_delete(cursor);
 		}
 
-		if (page_zip) {
-#ifdef UNIV_ZIP_DEBUG
-			ut_a(page_zip_validate(page_zip, page,
-					       cursor->index()));
-#endif /* UNIV_ZIP_DEBUG */
-			page_cur_delete_rec(btr_cur_get_page_cur(cursor),
-					    offsets, mtr);
-#ifdef UNIV_ZIP_DEBUG
-			ut_a(page_zip_validate(page_zip, page,
-					       cursor->index()));
-#endif /* UNIV_ZIP_DEBUG */
-
-			/* On compressed pages, the IBUF_BITMAP_FREE
-			space is not affected by deleting (purging)
-			records, because it is defined as the minimum
-			of space available *without* reorganize, and
-			space available in the modification log. */
-		} else {
-			const ulint	max_ins
-				= page_get_max_insert_size_after_reorganize(
-					page, 1);
-
-			page_cur_delete_rec(btr_cur_get_page_cur(cursor),
-					    offsets, mtr);
-
-			/* The change buffer does not handle inserts
-			into non-leaf pages, into clustered indexes,
-			or into the change buffer. */
-			if (!cursor->index()->is_clust()
-			    && !cursor->index()->table->is_temporary()
-			    && !dict_index_is_ibuf(cursor->index())) {
-				ibuf_update_free_bits_low(block, max_ins, mtr);
-			}
-		}
+		page_cur_delete_rec(btr_cur_get_page_cur(cursor),
+				    offsets, mtr);
 	}
 
 func_exit:
